@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sniper AR — Display</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{background:#050a05;color:#00ff41;font-family:'Courier New',monospace;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+        #topBar{display:flex;justify-content:space-between;align-items:center;padding:6px 16px;font-size:13px;letter-spacing:2px;border-bottom:1px solid #1a3a1a}
+        .title{font-size:16px;letter-spacing:4px;text-shadow:0 0 12px #00ff41}
+        #main{flex:1;display:flex}
+        #scopeWrap{flex:1;display:flex;align-items:center;justify-content:center;background:#020602}
+        #scopeCanvas{display:block}
+        #logPanel{width:320px;border-left:1px solid #1a3a1a;display:flex;flex-direction:column}
+        #logHeader{padding:6px 10px;font-size:11px;letter-spacing:2px;border-bottom:1px solid #1a3a1a;display:flex;gap:10px}
+        #logEntries{flex:1;overflow-y:auto;padding:6px 10px;font-size:10px;line-height:1.5}
+        .logE{white-space:pre-wrap;word-break:break-all;margin-bottom:2px;border-bottom:1px solid #0a1a0a;padding-bottom:2px}
+        .logE.warn{color:#ffaa00}.logE.error{color:#ff4141}
+    </style>
+</head>
+<body>
+    <div id="topBar">
+        <span class="title">SNIPER AR — DISPLAY</span>
+        <span>SCORE: <span id="scoreVal">0</span></span>
+        <span id="statusBar" style="color:#ffaa00">WAITING…</span>
+    </div>
+    <div id="main">
+        <div id="scopeWrap"><canvas id="scopeCanvas"></canvas></div>
+        <div id="logPanel">
+            <div id="logHeader">LOG OUTPUT</div>
+            <div id="logEntries"></div>
+        </div>
+    </div>
+
+    <script>
+    const DR = Math.PI / 180;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 3D MATH
+    // ═══════════════════════════════════════════════════════════════════════
+    function rotateYP(px, py, pz, yawR, pitchR) {
+        const cy = Math.cos(yawR), sy = Math.sin(yawR);
+        let x = px * cy + pz * sy, z = -px * sy + pz * cy, y = py;
+        const cp = Math.cos(pitchR), sp = Math.sin(pitchR);
+        return { x, y: y * cp - z * sp, z: y * sp + z * cp };
+    }
+    function project(p, fl, cx, cy) {
+        if (p.z < 0.15) return null;
+        return { sx: cx + (p.x / p.z) * fl, sy: cy - (p.y / p.z) * fl, d: p.z };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ROOM
+    // ═══════════════════════════════════════════════════════════════════════
+    const HALF = 30, GRID = 3;
+    function buildRoom() {
+        const L = [];
+        for (let i = -HALF; i <= HALF; i += GRID) {
+            L.push({a:[i,-HALF,-HALF],b:[i,-HALF,HALF],t:'f'}); L.push({a:[-HALF,-HALF,i],b:[HALF,-HALF,i],t:'f'});
+        }
+        for (let i = -HALF; i <= HALF; i += GRID) {
+            L.push({a:[i,HALF,-HALF],b:[i,HALF,HALF],t:'c'}); L.push({a:[-HALF,HALF,i],b:[HALF,HALF,i],t:'c'});
+        }
+        for (let y=-HALF;y<=HALF;y+=GRID) L.push({a:[-HALF,y,-HALF],b:[HALF,y,-HALF],t:'w'});
+        for (let x=-HALF;x<=HALF;x+=GRID) L.push({a:[x,-HALF,-HALF],b:[x,HALF,-HALF],t:'w'});
+        for (let y=-HALF;y<=HALF;y+=GRID) L.push({a:[-HALF,y,HALF],b:[HALF,y,HALF],t:'w'});
+        for (let x=-HALF;x<=HALF;x+=GRID) L.push({a:[x,-HALF,HALF],b:[x,HALF,HALF],t:'w'});
+        for (let y=-HALF;y<=HALF;y+=GRID) L.push({a:[-HALF,y,-HALF],b:[-HALF,y,HALF],t:'w'});
+        for (let z=-HALF;z<=HALF;z+=GRID) L.push({a:[-HALF,-HALF,z],b:[-HALF,HALF,z],t:'w'});
+        for (let y=-HALF;y<=HALF;y+=GRID) L.push({a:[HALF,y,-HALF],b:[HALF,y,HALF],t:'w'});
+        for (let z=-HALF;z<=HALF;z+=GRID) L.push({a:[HALF,-HALF,z],b:[HALF,HALF,z],t:'w'});
+        return L;
+    }
+    const ROOM = buildRoom();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // GAMESTATE
+    // ═══════════════════════════════════════════════════════════════════════
+    let gs = null;
+
+    function render3D(ctx, cw, ch, cx, cy, R, yawDeg, pitchDeg, targets, hitEffects, fovDeg) {
+        const yR = yawDeg * DR, pR = pitchDeg * DR;
+        const fl = R / Math.tan(fovDeg / 2 * DR);
+
+        // Room
+        ctx.strokeStyle = 'rgba(0,255,65,0.18)';
+        ctx.lineWidth = 1;
+        for (const ln of ROOM) {
+            const a = rotateYP(ln.a[0], ln.a[1], ln.a[2], yR, pR);
+            const b = rotateYP(ln.b[0], ln.b[1], ln.b[2], yR, pR);
+            const pa = project(a, fl, cx, cy);
+            const pb = project(b, fl, cx, cy);
+            if (!pa || !pb) continue;
+            ctx.beginPath(); ctx.moveTo(pa.sx,pa.sy); ctx.lineTo(pb.sx,pb.sy); ctx.stroke();
+        }
+
+        // Targets
+        if (targets) {
+            const sorted = targets.filter(t=>t.alive).map(t=>{
+                const cam=rotateYP(t.x,t.y,t.z,yR,pR);
+                return {t,p:project(cam,fl,cx,cy),dist:cam.z};
+            }).filter(s=>s.p).sort((a,b)=>b.dist-a.dist);
+
+            for (const {t,p,dist} of sorted) {
+                const screenR=(t.r/dist)*fl;
+                if(screenR<2) continue;
+                const glow=ctx.createRadialGradient(p.sx,p.sy,screenR*0.1,p.sx,p.sy,screenR*1.4);
+                glow.addColorStop(0,t.color);glow.addColorStop(0.6,t.color+'aa');glow.addColorStop(1,'transparent');
+                ctx.fillStyle=glow;
+                ctx.beginPath();ctx.arc(p.sx,p.sy,screenR*1.4,0,Math.PI*2);ctx.fill();
+                ctx.fillStyle=t.color;
+                ctx.beginPath();ctx.arc(p.sx,p.sy,screenR,0,Math.PI*2);ctx.fill();
+            }
+        }
+
+        // Effects
+        if (hitEffects) {
+            for (const ef of hitEffects) {
+                if (ef.age > 1) continue;
+                const cam=rotateYP(ef.x,ef.y,ef.z,yR,pR);
+                const p=project(cam,fl,cx,cy);
+                if(!p) continue;
+                const al=Math.max(0,1-ef.age);
+                if(ef.type==='hit'){
+                    const spread=Math.abs((0.5/p.d)*fl);
+                    for(let k=0;k<12;k++){
+                        const ang=k/12*Math.PI*2;const dist2=spread*(1+ef.age*5);
+                        const sz=Math.max(1,3*(1-ef.age));
+                        ctx.fillStyle=`rgba(255,${Math.floor(150+105*(1-ef.age))},50,${al})`;
+                        ctx.beginPath();ctx.arc(p.sx+Math.cos(ang)*dist2,p.sy+Math.sin(ang)*dist2,sz,0,Math.PI*2);ctx.fill();
+                    }
+                    const flashR=spread*0.6*(1-ef.age);
+                    if(flashR>0.5){const fg=ctx.createRadialGradient(p.sx,p.sy,0,p.sx,p.sy,flashR);
+                    fg.addColorStop(0,`rgba(255,255,200,${al*0.7})`);fg.addColorStop(1,'transparent');
+                    ctx.fillStyle=fg;ctx.beginPath();ctx.arc(p.sx,p.sy,flashR,0,Math.PI*2);ctx.fill();}
+                } else {
+                    ctx.strokeStyle=`rgba(255,80,80,${al})`;ctx.lineWidth=2;
+                    const s=6+ef.age*6;ctx.beginPath();
+                    ctx.moveTo(p.sx-s,p.sy-s);ctx.lineTo(p.sx+s,p.sy+s);
+                    ctx.moveTo(p.sx+s,p.sy-s);ctx.lineTo(p.sx-s,p.sy+s);ctx.stroke();
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // DRAW LOOP
+    // ═══════════════════════════════════════════════════════════════════════
+    const scopeCanvas = document.getElementById('scopeCanvas');
+    const tc = scopeCanvas.getContext('2d');
+    const scopeWrap = document.getElementById('scopeWrap');
+    function resize() { scopeCanvas.width = scopeWrap.clientWidth; scopeCanvas.height = scopeWrap.clientHeight; }
+    resize(); window.addEventListener('resize', resize);
+
+    function drawFrame() {
+        const cw = scopeCanvas.width, ch = scopeCanvas.height;
+        tc.fillStyle = '#050a05'; tc.fillRect(0, 0, cw, ch);
+        const R = Math.min(cw, ch) * 0.46;
+        const cx = cw / 2, cy = ch / 2;
+
+        if (!gs) {
+            tc.fillStyle = '#1a3a1a'; tc.font = '16px Courier New'; tc.textAlign = 'center';
+            tc.fillText('WAITING FOR CONTROLLER...', cx, cy);
+        } else {
+            // Scope tube
+            tc.beginPath(); tc.arc(cx, cy, R, 0, Math.PI * 2);
+            tc.fillStyle = '#010801'; tc.fill();
+            tc.strokeStyle = '#3a6a3a'; tc.lineWidth = 7; tc.stroke();
+
+            tc.save();
+            tc.beginPath(); tc.arc(cx, cy, R - 4, 0, Math.PI * 2); tc.clip();
+            render3D(tc, cw, ch, cx, cy, R, gs.yaw, gs.pitch, gs.targets, gs.hitEffects, gs.fov || 50);
+
+            // Crosshair
+            const gap = 10;
+            tc.strokeStyle = 'rgba(0,255,65,0.5)'; tc.lineWidth = 1;
+            tc.beginPath();
+            tc.moveTo(cx-(R-6),cy);tc.lineTo(cx-gap,cy);
+            tc.moveTo(cx+gap,cy);tc.lineTo(cx+(R-6),cy);
+            tc.moveTo(cx,cy-(R-6));tc.lineTo(cx,cy-gap);
+            tc.moveTo(cx,cy+gap);tc.lineTo(cx,cy+(R-6));
+            tc.stroke();
+            for(let m=1;m<=3;m++){const md=R*m/4;
+            tc.fillStyle='rgba(0,255,65,0.25)';
+            tc.fillRect(cx+md-1,cy-1,3,3);tc.fillRect(cx-md-1,cy-1,3,3);
+            tc.fillRect(cx-1,cy+md-1,3,3);tc.fillRect(cx-1,cy-md-1,3,3);}
+            tc.shadowColor='#00ff41';tc.shadowBlur=16;tc.fillStyle='#00ff41';
+            tc.beginPath();tc.arc(cx,cy,3,0,Math.PI*2);tc.fill();tc.shadowBlur=0;
+            const vg=tc.createRadialGradient(cx,cy,R*0.55,cx,cy,R-4);
+            vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,0.55)');
+            tc.fillStyle=vg;tc.fillRect(cx-R,cy-R,R*2,R*2);
+            tc.restore();
+
+            document.getElementById('scoreVal').textContent = gs.score;
+        }
+        requestAnimationFrame(drawFrame);
+    }
+    drawFrame();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // WEBSOCKET
+    // ═══════════════════════════════════════════════════════════════════════
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const statusBar = document.getElementById('statusBar');
+    ws.onopen = () => {
+        ws.send(JSON.stringify({type:'register',role:'display'}));
+        statusBar.textContent='CONNECTED'; statusBar.style.color='#00ff41';
+    };
+    ws.onclose = () => { statusBar.textContent='DISCONNECTED'; statusBar.style.color='#ff4141'; };
+    ws.onerror = () => { statusBar.textContent='WS ERROR'; statusBar.style.color='#ff4141'; };
+
+    const logEntries = document.getElementById('logEntries');
+    ws.onmessage = ev => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'gamestate') { gs = msg; return; }
+        if (msg.type === 'log') {
+            const d = document.createElement('div');
+            d.className = 'logE' + (msg.level === 'warn' ? ' warn' : msg.level === 'error' ? ' error' : '');
+            const ts = new Date(msg.ts).toLocaleTimeString();
+            d.textContent = `[${ts}] ${msg.msg}`;
+            logEntries.appendChild(d);
+            logEntries.scrollTop = logEntries.scrollHeight;
+        }
+    };
+    </script>
+</body>
+</html>

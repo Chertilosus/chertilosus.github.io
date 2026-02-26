@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sniper AR</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #050a05;
+            color: #00ff41;
+            font-family: 'Courier New', monospace;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 28px;
+        }
+
+        h1 {
+            font-size: 28px;
+            letter-spacing: 8px;
+            text-shadow: 0 0 30px #00ff41;
+        }
+        .sub {
+            font-size: 12px;
+            color: #2a7a3a;
+            letter-spacing: 3px;
+        }
+
+        .links {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            width: 300px;
+        }
+
+        a {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            border: 2px solid #00ff41;
+            color: #00ff41;
+            text-decoration: none;
+            padding: 18px;
+            text-align: center;
+            letter-spacing: 3px;
+            font-size: 17px;
+            box-shadow: 0 0 10px rgba(0,255,65,0.1);
+            transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+        }
+        a:hover {
+            background: #00ff41;
+            color: #000;
+            box-shadow: 0 0 25px #00ff41;
+        }
+        a span {
+            font-size: 11px;
+            letter-spacing: 1px;
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>SNIPER AR</h1>
+    <p class="sub">PROTOTYPE v0.1</p>
+
+    <div class="links">
+        <a href="/display.html">
+            [ DISPLAY ]
+            <span>Открыть на ПК</span>
+        </a>
+        <a href="/controller.html">
+            [ CONTROLLER ]
+            <span>Открыть на телефоне</span>
+        </a>
+    </div>
+
+</body>
+</html>

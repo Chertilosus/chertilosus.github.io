@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Sniper AR — Controller</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        html,body{height:100%;width:100%;background:#050a05;overflow:hidden}
+        body{display:flex;flex-direction:row;color:#00ff41;
+            font-family:'Courier New',monospace;
+            user-select:none;-webkit-user-select:none}
+        .side{display:flex;flex-direction:column;align-items:center;justify-content:center;
+            gap:6px;padding:6px 8px;width:80px;min-width:80px;flex-shrink:0}
+        .side button{background:transparent;border:1px solid #00ff41;color:#00ff41;
+            font-family:'Courier New',monospace;font-size:11px;
+            padding:10px 4px;width:100%;cursor:pointer;letter-spacing:1px;
+            -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+        .side button.active{background:#00ff41;color:#000}
+        #scopeWrap{flex:1;display:flex;align-items:center;justify-content:center;position:relative}
+        #scopeCanvas{display:block;touch-action:none}
+        .info{font-size:10px;color:#2a7a3a;text-align:center;letter-spacing:1px}
+        .info span{color:#00ff41}
+        #statusBar{color:#ffaa00;font-size:10px;text-align:center;word-wrap:break-word}
+        .zoom-ctrl{position:fixed;right:0;top:0;height:100%;width:56px;
+            display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+            z-index:10;background:rgba(5,10,5,0.7)}
+        .zoom-ctrl span{font-size:11px;color:#00ff41}
+        .zoom-ctrl input[type=range]{writing-mode:vertical-lr;direction:rtl;
+            height:calc(100vh - 40px);width:48px;accent-color:#00ff41;cursor:pointer;
+            -webkit-tap-highlight-color:transparent;touch-action:none}
+        #startOverlay{position:absolute;top:0;left:0;width:100%;height:100%;
+            display:flex;align-items:center;justify-content:center;z-index:5;
+            cursor:pointer;-webkit-tap-highlight-color:transparent}
+        #startOverlay span{font-size:28px;color:#00ff41;letter-spacing:6px;
+            text-shadow:0 0 20px #00ff41,0 0 40px #00ff41;animation:pulse 1.5s infinite}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+    </style>
+</head>
+<body>
+    <div class="side">
+        <button id="calibBtn">RECENTER</button>
+        <button onclick="location.reload()">RELOAD</button>
+        <div id="statusBar">CONNECTING...</div>
+        <div class="info"><span id="freqVal">0Hz</span></div>
+    </div>
+    <div id="scopeWrap">
+        <canvas id="scopeCanvas"></canvas>
+        <div id="startOverlay"><span>START</span></div>
+    </div>
+    <div class="side">
+        <div class="info">SCORE<br><span id="scoreVal">0</span></div>
+    </div>
+    <div class="zoom-ctrl"><span id="zoomLabel">4x</span><input type="range" id="zoomSlider" min="8" max="80" value="50"></div>
+
+    <script>
+    const DR = Math.PI / 180;
+    let fovDeg = 50;
+
+    // Fullscreen при первом касании
+    function goFullscreen() {
+        const el = document.documentElement;
+        const rfs = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+        if (rfs) rfs.call(el).catch(()=>{});
+    }
+    document.addEventListener('click', function _fs() {
+        goFullscreen();
+        document.removeEventListener('click', _fs);
+    }, { once: true });
+
+    // Инверсия осей (убрана)
+
+    document.getElementById('zoomSlider').addEventListener('input', e => {
+        fovDeg = Number(e.target.value);
+        const zoom = (80 / fovDeg).toFixed(1).replace(/\.0$/, '');
+        document.getElementById('zoomLabel').textContent = zoom + 'x';
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // AUDIO
+    // ═══════════════════════════════════════════════════════════════════════
+    let audioCtx;
+    function ensureAudio() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+    function playShoot() {
+        ensureAudio();
+        const ctx = audioCtx, t = ctx.currentTime, dur = 0.12;
+        const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+        const src = ctx.createBufferSource(); src.buffer = buf;
+        const flt = ctx.createBiquadFilter(); flt.type = 'lowpass';
+        flt.frequency.setValueAtTime(3000, t); flt.frequency.exponentialRampToValueAtTime(200, t + dur);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.6, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        src.connect(flt); flt.connect(g); g.connect(ctx.destination); src.start(t); src.stop(t + dur);
+    }
+    function playHit() {
+        ensureAudio();
+        const ctx = audioCtx, t = ctx.currentTime;
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(600, t); o.frequency.exponentialRampToValueAtTime(1400, t + 0.15);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.25);
+    }
+    function playMiss() {
+        ensureAudio();
+        const ctx = audioCtx, t = ctx.currentTime;
+        const o = ctx.createOscillator(); o.type = 'triangle';
+        o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.2);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0.3, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+        o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.2);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 3D MATH
+    // ═══════════════════════════════════════════════════════════════════════
+    function rotateYP(px, py, pz, yawR, pitchR) {
+        const cy = Math.cos(yawR), sy = Math.sin(yawR);
+        let x = px * cy + pz * sy, z = -px * sy + pz * cy, y = py;
+        const cp = Math.cos(pitchR), sp = Math.sin(pitchR);
+        return { x, y: y * cp - z * sp, z: y * sp + z * cp };
+    }
+    function project(p, fl, cx, cy) {
+        if (p.z < 0.15) return null;
+        return { sx: cx + (p.x / p.z) * fl, sy: cy - (p.y / p.z) * fl, d: p.z };
+    }
+    function camForwardWorld(yR, pR) {
+        return { x: -Math.cos(pR) * Math.sin(yR), y: Math.sin(pR), z: Math.cos(pR) * Math.cos(yR) };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ROOM — очень большой куб, сетка
+    // ═══════════════════════════════════════════════════════════════════════
+    const HALF = 30;
+    const GRID = 3;
+
+    function buildRoom() {
+        const L = [];
+        // Пол y = -HALF
+        for (let i = -HALF; i <= HALF; i += GRID) {
+            L.push({ a:[i,-HALF,-HALF], b:[i,-HALF,HALF], t:'f' });
+            L.push({ a:[-HALF,-HALF,i], b:[HALF,-HALF,i], t:'f' });
+        }
+        // Потолок y = +HALF
+        for (let i = -HALF; i <= HALF; i += GRID) {
+            L.push({ a:[i,HALF,-HALF], b:[i,HALF,HALF], t:'c' });
+            L.push({ a:[-HALF,HALF,i], b:[HALF,HALF,i], t:'c' });
+        }
+        // z = -HALF
+        for (let y = -HALF; y <= HALF; y += GRID) L.push({ a:[-HALF,y,-HALF], b:[HALF,y,-HALF], t:'w' });
+        for (let x = -HALF; x <= HALF; x += GRID) L.push({ a:[x,-HALF,-HALF], b:[x,HALF,-HALF], t:'w' });
+        // z = +HALF
+        for (let y = -HALF; y <= HALF; y += GRID) L.push({ a:[-HALF,y,HALF], b:[HALF,y,HALF], t:'w' });
+        for (let x = -HALF; x <= HALF; x += GRID) L.push({ a:[x,-HALF,HALF], b:[x,HALF,HALF], t:'w' });
+        // x = -HALF
+        for (let y = -HALF; y <= HALF; y += GRID) L.push({ a:[-HALF,y,-HALF], b:[-HALF,y,HALF], t:'w' });
+        for (let z = -HALF; z <= HALF; z += GRID) L.push({ a:[-HALF,-HALF,z], b:[-HALF,HALF,z], t:'w' });
+        // x = +HALF
+        for (let y = -HALF; y <= HALF; y += GRID) L.push({ a:[HALF,y,-HALF], b:[HALF,y,HALF], t:'w' });
+        for (let z = -HALF; z <= HALF; z += GRID) L.push({ a:[HALF,-HALF,z], b:[HALF,HALF,z], t:'w' });
+        return L;
+    }
+    const ROOM = buildRoom();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TARGETS
+    // ═══════════════════════════════════════════════════════════════════════
+    const COLORS = ['#ff3030','#30a0ff','#ffdd30','#30ffaa','#ff60d0','#ff8020','#a060ff','#40ff40'];
+    let targets = [];
+    let hitEffects = [];
+    let score = 0;
+
+    function spawnTargets() {
+        targets = [];
+        for (let i = 0; i < 25; i++) spawnOne();
+    }
+    function spawnOne() {
+        const angle = Math.random() * Math.PI * 2;
+        const dist  = 4 + Math.random() * 18;
+        targets.push({
+            x: Math.cos(angle) * dist,
+            y: -10 + Math.random() * 20,
+            z: Math.sin(angle) * dist,
+            r: 0.3 + Math.random() * 0.7,
+            color: COLORS[Math.floor(Math.random() * COLORS.length)],
+            alive: true
+        });
+    }
+    spawnTargets();
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SHOOTING
+    // ═══════════════════════════════════════════════════════════════════════
+    let accumYaw = 0, accumPitch = 0;
+    let isActive = false;
+
+    function shoot() {
+        if (!isActive) return;
+        playShoot();
+        const yR = accumYaw * DR, pR = accumPitch * DR;
+        let hit = false;
+        const sorted = targets.filter(t => t.alive)
+            .map(t => ({ t, d: Math.hypot(t.x, t.y, t.z) }))
+            .sort((a, b) => a.d - b.d);
+
+        for (const { t } of sorted) {
+            const cam = rotateYP(t.x, t.y, t.z, yR, pR);
+            if (cam.z < 0.1) continue;
+            const angDist = Math.atan2(Math.hypot(cam.x, cam.y), cam.z);
+            const angRad  = Math.atan2(t.r, Math.hypot(t.x, t.y, t.z));
+            if (angDist < angRad) {
+                t.alive = false; hit = true; score++;
+                document.getElementById('scoreVal').textContent = score;
+                hitEffects.push({ x: t.x, y: t.y, z: t.z, t: performance.now(), type: 'hit' });
+                setTimeout(playHit, 50);
+                spawnOne();
+                break;
+            }
+        }
+        if (!hit) {
+            playMiss();
+            const fwd = camForwardWorld(yR, pR);
+            hitEffects.push({ x: fwd.x * 15, y: fwd.y * 15, z: fwd.z * 15, t: performance.now(), type: 'miss' });
+        }
+        sendGameState();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // RENDER
+    // ═══════════════════════════════════════════════════════════════════════
+    const scopeCanvas = document.getElementById('scopeCanvas');
+    const tc = scopeCanvas.getContext('2d');
+    const scopeWrap = document.getElementById('scopeWrap');
+    function resizeScope() {
+        const w = scopeWrap.clientWidth, h = scopeWrap.clientHeight;
+        scopeCanvas.width = w; scopeCanvas.height = h;
+    }
+    resizeScope(); window.addEventListener('resize', () => { setTimeout(resizeScope, 50); });
+
+    function render3D(ctx, cw, ch, cx, cy, R, yawDeg, pitchDeg) {
+        const yR = yawDeg * DR, pR = pitchDeg * DR;
+        const fl = R / Math.tan(fovDeg / 2 * DR);
+
+        // Комната — статичная зелёная сетка
+        ctx.strokeStyle = 'rgba(0,255,65,0.18)';
+        ctx.lineWidth = 1;
+        for (const ln of ROOM) {
+            const a = rotateYP(ln.a[0], ln.a[1], ln.a[2], yR, pR);
+            const b = rotateYP(ln.b[0], ln.b[1], ln.b[2], yR, pR);
+            const pa = project(a, fl, cx, cy);
+            const pb = project(b, fl, cx, cy);
+            if (!pa || !pb) continue;
+            ctx.beginPath(); ctx.moveTo(pa.sx, pa.sy); ctx.lineTo(pb.sx, pb.sy); ctx.stroke();
+        }
+
+        // Мишени — светящиеся шары
+        const now = performance.now();
+        const sorted = targets.filter(t => t.alive)
+            .map(t => {
+                const cam = rotateYP(t.x, t.y, t.z, yR, pR);
+                const p = project(cam, fl, cx, cy);
+                return { t, p, dist: cam.z };
+            })
+            .filter(s => s.p)
+            .sort((a, b) => b.dist - a.dist);
+
+        for (const { t, p, dist } of sorted) {
+            const screenR = (t.r / dist) * fl;
+            if (screenR < 2) continue;
+            const glow = ctx.createRadialGradient(p.sx, p.sy, screenR * 0.1, p.sx, p.sy, screenR * 1.4);
+            glow.addColorStop(0, t.color);
+            glow.addColorStop(0.6, t.color + 'aa');
+            glow.addColorStop(1, 'transparent');
+            ctx.fillStyle = glow;
+            ctx.beginPath(); ctx.arc(p.sx, p.sy, screenR * 1.4, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = t.color;
+            ctx.beginPath(); ctx.arc(p.sx, p.sy, screenR, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Эффекты
+        for (let i = hitEffects.length - 1; i >= 0; i--) {
+            const ef = hitEffects[i];
+            const age = (now - ef.t) / 1000;
+            if (age > 1) { hitEffects.splice(i, 1); continue; }
+            const cam = rotateYP(ef.x, ef.y, ef.z, yR, pR);
+            const p = project(cam, fl, cx, cy);
+            if (!p) continue;
+            const al = Math.max(0, 1 - age);
+            if (ef.type === 'hit') {
+                const spread = Math.abs((0.5 / p.d) * fl);
+                const count = 12;
+                for (let k = 0; k < count; k++) {
+                    const ang = k / count * Math.PI * 2;
+                    const dist2 = spread * (1 + age * 5);
+                    const sz = Math.max(1, 3 * (1 - age));
+                    const px2 = p.sx + Math.cos(ang) * dist2;
+                    const py2 = p.sy + Math.sin(ang) * dist2;
+                    ctx.fillStyle = `rgba(255,${Math.floor(150 + 105 * (1-age))},50,${al})`;
+                    ctx.beginPath(); ctx.arc(px2, py2, sz, 0, Math.PI * 2); ctx.fill();
+                }
+                const flashR = spread * 0.6 * (1 - age);
+                if (flashR > 0.5) {
+                    const fg = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, flashR);
+                    fg.addColorStop(0, `rgba(255,255,200,${al * 0.7})`);
+                    fg.addColorStop(1, 'transparent');
+                    ctx.fillStyle = fg;
+                    ctx.beginPath(); ctx.arc(p.sx, p.sy, flashR, 0, Math.PI * 2); ctx.fill();
+                }
+            } else {
+                ctx.strokeStyle = `rgba(255,80,80,${al})`; ctx.lineWidth = 2;
+                const s = 6 + age * 6;
+                ctx.beginPath();
+                ctx.moveTo(p.sx - s, p.sy - s); ctx.lineTo(p.sx + s, p.sy + s);
+                ctx.moveTo(p.sx + s, p.sy - s); ctx.lineTo(p.sx - s, p.sy + s);
+                ctx.stroke();
+            }
+        }
+    }
+
+    function drawScope() {
+        const cw = scopeCanvas.width, ch = scopeCanvas.height;
+        tc.fillStyle = '#050a05'; tc.fillRect(0, 0, cw, ch);
+        const R = Math.min(cw, ch) * 0.46;
+        const cx = cw / 2, cy = ch / 2;
+
+        // Линза
+        tc.beginPath(); tc.arc(cx, cy, R, 0, Math.PI * 2);
+        tc.fillStyle = '#010801'; tc.fill();
+        tc.strokeStyle = '#3a6a3a'; tc.lineWidth = 7; tc.stroke();
+
+        tc.save();
+        tc.beginPath(); tc.arc(cx, cy, R - 4, 0, Math.PI * 2); tc.clip();
+        render3D(tc, cw, ch, cx, cy, R, accumYaw, accumPitch);
+
+        // Перекрестие
+        const gap = 10;
+        tc.strokeStyle = 'rgba(0,255,65,0.5)'; tc.lineWidth = 1;
+        tc.beginPath();
+        tc.moveTo(cx-(R-6),cy); tc.lineTo(cx-gap,cy);
+        tc.moveTo(cx+gap,cy); tc.lineTo(cx+(R-6),cy);
+        tc.moveTo(cx,cy-(R-6)); tc.lineTo(cx,cy-gap);
+        tc.moveTo(cx,cy+gap); tc.lineTo(cx,cy+(R-6));
+        tc.stroke();
+        for (let m = 1; m <= 3; m++) {
+            const md = R * m / 4;
+            tc.fillStyle = 'rgba(0,255,65,0.25)';
+            tc.fillRect(cx+md-1,cy-1,3,3); tc.fillRect(cx-md-1,cy-1,3,3);
+            tc.fillRect(cx-1,cy+md-1,3,3); tc.fillRect(cx-1,cy-md-1,3,3);
+        }
+        tc.shadowColor = '#00ff41'; tc.shadowBlur = 16;
+        tc.fillStyle = '#00ff41';
+        tc.beginPath(); tc.arc(cx,cy,3,0,Math.PI*2); tc.fill();
+        tc.shadowBlur = 0;
+        const vg = tc.createRadialGradient(cx,cy,R*0.55,cx,cy,R-4);
+        vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.55)');
+        tc.fillStyle = vg; tc.fillRect(cx-R,cy-R,R*2,R*2);
+        tc.restore();
+        requestAnimationFrame(drawScope);
+    }
+    drawScope();
+
+    scopeCanvas.addEventListener('pointerdown', e => { e.preventDefault(); shoot(); });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // WEBSOCKET
+    // ═══════════════════════════════════════════════════════════════════════
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const statusBar = document.getElementById('statusBar');
+    const logBuf = [];
+    function sendLog(lv, msg) {
+        const e = JSON.stringify({type:'log',level:lv,msg,ts:Date.now()});
+        ws.readyState === WebSocket.OPEN ? ws.send(e) : logBuf.push(e);
+    }
+    const _log=console.log.bind(console),_warn=console.warn.bind(console),_err=console.error.bind(console);
+    console.log   = (...a) => { _log(...a);  sendLog('info',  a.map(v=>typeof v==='object'?JSON.stringify(v):String(v)).join(' ')); };
+    console.warn  = (...a) => { _warn(...a); sendLog('warn',  a.map(v=>typeof v==='object'?JSON.stringify(v):String(v)).join(' ')); };
+    console.error = (...a) => { _err(...a);  sendLog('error', a.map(v=>typeof v==='object'?JSON.stringify(v):String(v)).join(' ')); };
+    window.onerror = (m,s,l,c) => sendLog('error',`JS: ${m} (${s}:${l}:${c})`);
+
+    function sendGameState() {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({
+            type: 'gamestate',
+            yaw: accumYaw, pitch: accumPitch, score, targets,
+            hitEffects: hitEffects.map(e => ({x:e.x,y:e.y,z:e.z,age:(performance.now()-e.t)/1000,type:e.type})),
+            fov: fovDeg
+        }));
+    }
+
+    ws.onopen = () => {
+        ws.send(JSON.stringify({type:'register',role:'controller'}));
+        while (logBuf.length) ws.send(logBuf.shift());
+        statusBar.textContent = 'CONNECTED — TAP START'; statusBar.style.color = '#00ff41';
+    };
+    ws.onclose = () => { statusBar.textContent='DISCONNECTED'; statusBar.style.color='#ff4141'; };
+    ws.onerror = () => { statusBar.textContent='WS ERROR'; statusBar.style.color='#ff4141'; };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ORIENTATION — portrait (телефон вертикально)
+    // ═══════════════════════════════════════════════════════════════════════
+    function getForward(alpha, beta, gamma) {
+        const a = alpha * DR, b = beta * DR, g = gamma * DR;
+        const ca=Math.cos(a),sa=Math.sin(a),cb=Math.cos(b),sb=Math.sin(b),cg=Math.cos(g),sg=Math.sin(g);
+        return { x:-(ca*sg+sa*sb*cg), y:-(sa*sg-ca*sb*cg), z:-(cb*cg) };
+    }
+
+    function fwdToAng(f) {
+        return { yaw: Math.atan2(f.x, f.y), pitch: Math.asin(Math.max(-1, Math.min(1, f.z))) };
+    }
+
+    let calibYaw = null, calibPitch = null;
+    function resetAccum() { accumYaw=0; accumPitch=0; calibYaw=null; calibPitch=null; }
+
+    let lastSend = 0; const SEND_INT = 1000/30; let frameCount = 0;
+    setInterval(()=>{ document.getElementById('freqVal').textContent=frameCount+'Hz'; frameCount=0; },1000);
+
+    document.getElementById('startOverlay').addEventListener('click', async () => {
+        if (isActive) return;
+        if (typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function') {
+            try { if (await DeviceOrientationEvent.requestPermission()!=='granted'){statusBar.textContent='DENIED';statusBar.style.color='#ff4141';return;} }
+            catch(e){statusBar.textContent='ERROR';statusBar.style.color='#ff4141';return;}
+        }
+        isActive=true; resetAccum(); score=0; document.getElementById('scoreVal').textContent='0';
+        spawnTargets();
+        document.getElementById('startOverlay').style.display='none';
+        statusBar.textContent=''; statusBar.style.color='#00ff41';
+    });
+
+    document.getElementById('calibBtn').addEventListener('click', () => {
+        resetAccum();
+        statusBar.textContent='RECENTERED ✓';
+        setTimeout(()=>{ if(isActive) statusBar.textContent=''; },1000);
+    });
+
+    let firstEv = true;
+    window.addEventListener('deviceorientation', e => {
+        if(firstEv){firstEv=false;console.log(`First: a=${(e.alpha??0).toFixed(1)} b=${(e.beta??0).toFixed(1)} g=${(e.gamma??0).toFixed(1)}`);}
+        if(!isActive) return;
+
+        const alpha = e.alpha ?? 0, beta = e.beta ?? 0, gamma = e.gamma ?? 0;
+        const fwd = getForward(alpha, beta, gamma);
+        const ang = fwdToAng(fwd);
+        if (calibYaw === null) { calibYaw = ang.yaw; calibPitch = ang.pitch; return; }
+        let dY = (ang.yaw - calibYaw) / DR, dP = (ang.pitch - calibPitch) / DR;
+        if (dY > 180) dY -= 360; if (dY < -180) dY += 360;
+
+        accumYaw   = -dY;
+        accumPitch = dP;
+
+        frameCount++;
+        const now = Date.now(); if (now - lastSend < SEND_INT) return; lastSend = now; sendGameState();
+    });
+    </script>
+</body>
+</html>
