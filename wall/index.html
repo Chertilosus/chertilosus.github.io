@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wall.tg Profile Viewer</title>
+    <meta
+      name="description"
+      content="Статический просмотр профиля wall.tg по Telegram ID для GitHub Pages"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="orb orb-a" aria-hidden="true"></div>
+    <div class="orb orb-b" aria-hidden="true"></div>
+    <div class="noise" aria-hidden="true"></div>
+
+    <main class="app">
+      <header class="hero reveal">
+        <p class="eyebrow">Wall.tg API</p>
+        <h1>Поиск профиля по Telegram ID</h1>
+      </header>
+
+      <section class="panel form-panel reveal" style="--delay: 0.08s">
+        <form id="lookupForm" novalidate>
+          <label for="profileId">Telegram ID</label>
+          <div class="lookup-row">
+            <input
+              id="profileId"
+              name="profileId"
+              type="text"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="877583214"
+              required
+            />
+            <button id="submitBtn" type="submit">Загрузить</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="feedback" class="feedback" aria-live="polite"></section>
+
+      <section id="results" class="results hidden">
+        <article id="profileCard" class="panel profile-card"></article>
+
+        <div id="groups" class="groups"></div>
+
+        <details class="panel raw-panel">
+          <summary>Полный JSON ответ</summary>
+          <div class="raw-toolbar">
+            <button id="copyJsonBtn" type="button">Копировать JSON</button>
+          </div>
+          <pre id="rawJson" aria-label="Raw JSON response"></pre>
+        </details>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
